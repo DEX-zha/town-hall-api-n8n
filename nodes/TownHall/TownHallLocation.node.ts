@@ -125,6 +125,7 @@ function normalizeLocationInput(
   const arr = normalizeAddresses(input.addresses);
 
   let normalizedAddresses: NormalizedAddress[] = arr ? [...arr] : [];
+
   if (!normalizedAddresses.length && singleAddress) {
     normalizedAddresses.push({
       address: singleAddress,
@@ -133,28 +134,42 @@ function normalizeLocationInput(
       locationType: sanitizeString(input.locationType),
     });
   } else if (normalizedAddresses.length && singleAddress) {
-    warnings.push('Both "address" and "addresses" were provided. Prioritizing the array payload.');
+    const alreadyPresent = normalizedAddresses.some(
+      (entry) => sanitizeString(entry.address) === singleAddress,
+    );
+    if (!alreadyPresent) {
+      normalizedAddresses.unshift({
+        address: singleAddress,
+        price: toNumber(input.price),
+        surface: sanitizeString(input.surface),
+        locationType: sanitizeString(input.locationType),
+      });
+    }
   }
 
-  normalizedAddresses = normalizedAddresses.filter((entry) => entry.address.length);
+  normalizedAddresses = normalizedAddresses
+    .map((entry) => ({
+      ...entry,
+      address: entry.address.trim(),
+    }))
+    .filter((entry) => entry.address.length);
+
+  const dedupedAddresses: NormalizedAddress[] = [];
+  const seenAddresses = new Set<string>();
+  for (const entry of normalizedAddresses) {
+    if (!seenAddresses.has(entry.address)) {
+      dedupedAddresses.push(entry);
+      seenAddresses.add(entry.address);
+    }
+  }
+  normalizedAddresses = dedupedAddresses;
   if (!normalizedAddresses.length) {
     errors.push('At least one valid address is required.');
   }
 
-  const price =
-    normalizedAddresses.length === 1
-      ? normalizedAddresses[0].price ?? toNumber(input.price)
-      : toNumber(input.price);
-
-  const surface =
-    normalizedAddresses.length === 1
-      ? normalizedAddresses[0].surface ?? sanitizeString(input.surface)
-      : sanitizeString(input.surface);
-
-  const locationType =
-    normalizedAddresses.length === 1
-      ? normalizedAddresses[0].locationType ?? sanitizeString(input.locationType)
-      : sanitizeString(input.locationType);
+  const price = toNumber(input.price);
+  const surface = sanitizeString(input.surface);
+  const locationType = sanitizeString(input.locationType);
 
   if (errors.length) {
     return { body: null, errors, warnings };
@@ -164,7 +179,12 @@ function normalizeLocationInput(
 
   const body: NormalizedLocationBody = {
     sessionId,
-    address: singleAddress ?? normalizedAddresses[0]?.address,
+    address:
+      normalizedAddresses.length === 1 && singleAddress
+        ? singleAddress
+        : normalizedAddresses.length === 1
+        ? normalizedAddresses[0]?.address
+        : undefined,
     price,
     surface,
     locationType,
@@ -233,8 +253,8 @@ async function handleLocationRequest({
 
     const duplicatesSummary = duplicates
       .map((dup) => {
-        const address = sanitizeString(dup.address);
-        const reason = sanitizeString(dup.reason);
+        const address = sanitizeString((dup as IDataObject).address);
+        const reason = sanitizeString((dup as IDataObject).reason);
         if (address && reason) return `${address} (${reason})`;
         if (address) return address;
         return reason ?? 'duplicate';
