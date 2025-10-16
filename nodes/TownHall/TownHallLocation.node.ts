@@ -27,26 +27,37 @@ import {
 } from './shared';
 
 const locationToolSchema = z.object({
-  sessionId: z.string().describe('Optional session identifier.').optional(),
-  address: z.string().describe('Single address.').optional(),
+  sessionId: z.string().describe('Optional session identifier to correlate multiple calls.').optional(),
+  address: z.string().describe('Primary address string if only one location is provided.').optional(),
   addresses: z
     .array(
       z.union([
-        z.string().describe('Address text'),
+        z.string().describe('Raw address string (the model will enrich if needed).'),
         z.object({
-          address: z.string().describe('Full address text.'),
-          price: z.union([z.number(), z.string()]).optional(),
-          surface: z.string().optional(),
-          locationType: z.string().optional(),
+          address: z.string().describe('Full address text for the location.'),
+          price: z
+            .union([z.number(), z.string()])
+            .describe('Monthly or total price. Accepts number or string like "1200€".')
+            .optional(),
+          surface: z.string().describe('Surface or area description, e.g. "85m²".').optional(),
+          locationType: z.string().describe('Location type such as "rent", "sale", "office".').optional(),
         }),
       ]),
     )
-    .describe('Array of locations. Strings or objects are accepted.')
+    .describe(
+      'Provide one or multiple locations. Use raw strings for simple cases or objects when price, surface, or type must accompany each address.',
+    )
     .optional(),
-  price: z.union([z.number(), z.string()]).optional(),
-  surface: z.string().optional(),
-  locationType: z.string().optional(),
-  extraFields: z.record(z.string(), z.unknown()).optional(),
+  price: z
+    .union([z.number(), z.string()])
+    .describe('Global price if a single address is supplied. Prefer numbers; strings also accepted.')
+    .optional(),
+  surface: z.string().describe('Global surface value when only one address is present.').optional(),
+  locationType: z.string().describe('High-level location type (e.g. rent, sale, office).').optional(),
+  extraFields: z
+    .record(z.string(), z.unknown())
+    .describe('Additional JSON key/value pairs to pass through to the API unchanged.')
+    .optional(),
 });
 
 export type LocationToolInput = z.infer<typeof locationToolSchema>;
@@ -65,7 +76,7 @@ class TownHallLocationTool extends DynamicStructuredTool<typeof locationToolSche
       name: options.name ?? 'town_hall_location_tool',
       description:
         options.description ??
-        'Send structured location data to the Project Buddy API. The AI can provide all parameters dynamically and they will be merged with the defaults configured on the node.',
+        'Send structured location data to the Project Buddy API. Always include at least one address. Fill price, surface, and location type when they are known or can be sensibly estimated. Leave fields out rather than invent implausible data.',
       schema: locationToolSchema,
       func: async (input: unknown) => {
         const parsed = locationToolSchema.parse(input);
@@ -179,18 +190,27 @@ async function handleLocationRequest({
   try {
     mergedInput = mergeLocationDefaults(manualDefaults, toolInput);
   } catch (error) {
+    const message = (error as Error).message;
     return {
       status: 'validation_error',
       action: 'location',
-      validationErrors: [(error as Error).message],
+      statusMessage: `Unable to merge location defaults: ${message}`,
+      validationErrors: [message],
     };
   }
 
   const { body, errors, warnings } = normalizeLocationInput(mergedInput);
   if (!body || errors.length) {
+    const messageParts = [
+      'Validation failed for location payload.',
+      errors.length ? `Errors: ${errors.join('; ')}` : null,
+      warnings.length ? `Warnings: ${warnings.join('; ')}` : null,
+    ].filter(Boolean);
+
     return {
       status: 'validation_error',
       action: 'location',
+      statusMessage: messageParts.join(' '),
       validationErrors: errors,
       validationWarnings: warnings.length ? warnings : undefined,
     };
@@ -200,9 +220,12 @@ async function handleLocationRequest({
 
   try {
     const response = await postToProjectBuddy(baseUrl, '/api/locations', cleanedBody);
+    const messageParts = ['Location data posted successfully.'];
+    if (warnings.length) messageParts.push(`Warnings: ${warnings.join('; ')}`);
     return {
       status: 'success',
       action: 'location',
+      statusMessage: messageParts.join(' '),
       requestBody: cleanedBody,
       response,
       validationWarnings: warnings.length ? warnings : undefined,
@@ -217,6 +240,7 @@ async function handleLocationRequest({
     return {
       status: 'error',
       action: 'location',
+      statusMessage: `Location request failed: ${payload.message}`,
       requestBody: cleanedBody,
       validationWarnings: warnings.length ? warnings : undefined,
       error: payload,
@@ -293,7 +317,13 @@ export class TownHallLocation implements INodeType {
         default: {},
         placeholder: 'Add Session Info',
         options: [
-          { displayName: 'Session ID', name: 'sessionId', type: 'string', default: '' },
+          {
+            displayName: 'Session ID',
+            name: 'sessionId',
+            type: 'string',
+            default: '',
+            description: 'Identifier shared across multiple calls so the API can link them together.',
+          },
           {
             displayName: 'Let Model Define "Session ID"',
             name: 'sessionId_aiFill',
@@ -306,6 +336,7 @@ export class TownHallLocation implements INodeType {
             type: 'string',
             default: '',
             placeholder: 'https://project-buddy.example.com',
+            description: 'Base URL of your Project Buddy instance. Leave blank to rely on environment variables.',
           },
         ],
       },
@@ -318,13 +349,37 @@ export class TownHallLocation implements INodeType {
         description: 'Pre-configure location defaults. The AI can override or complete these fields.',
         options: [
           { displayName: 'Let Model Define Location Group', name: 'location_aiFill', type: 'boolean', default: false },
-          { displayName: 'Address', name: 'address', type: 'string', default: '' },
+          {
+            displayName: 'Address',
+            name: 'address',
+            type: 'string',
+            default: '',
+            description: 'Primary address when only one location is needed (e.g. "12 rue des Fleurs, Paris").',
+          },
           { displayName: 'Let Model Define "Address"', name: 'address_aiFill', type: 'boolean', default: false },
-          { displayName: 'Price', name: 'price', type: 'number', default: undefined },
+          {
+            displayName: 'Price',
+            name: 'price',
+            type: 'number',
+            default: undefined,
+            description: 'Price associated with the location. Leave empty to let the model estimate.',
+          },
           { displayName: 'Let Model Define "Price"', name: 'price_aiFill', type: 'boolean', default: false },
-          { displayName: 'Surface', name: 'surface', type: 'string', default: '' },
+          {
+            displayName: 'Surface',
+            name: 'surface',
+            type: 'string',
+            default: '',
+            description: 'Surface or area (e.g. "85m²").',
+          },
           { displayName: 'Let Model Define "Surface"', name: 'surface_aiFill', type: 'boolean', default: false },
-          { displayName: 'Location Type', name: 'locationType', type: 'string', default: '' },
+          {
+            displayName: 'Location Type',
+            name: 'locationType',
+            type: 'string',
+            default: '',
+            description: 'Type or status of the location (e.g. "rent", "sale", "office").',
+          },
           {
             displayName: 'Let Model Define "Location Type"',
             name: 'locationType_aiFill',
@@ -344,10 +399,35 @@ export class TownHallLocation implements INodeType {
                 name: 'values',
                 displayName: 'Address',
                 values: [
-                  { displayName: 'Address', name: 'address', type: 'string', default: '', required: true },
-                  { displayName: 'Price', name: 'price', type: 'number', default: undefined },
-                  { displayName: 'Surface', name: 'surface', type: 'string', default: '' },
-                  { displayName: 'Location Type', name: 'locationType', type: 'string', default: '' },
+                  {
+                    displayName: 'Address',
+                    name: 'address',
+                    type: 'string',
+                    default: '',
+                    required: true,
+                    description: 'Full address for this entry.',
+                  },
+                  {
+                    displayName: 'Price',
+                    name: 'price',
+                    type: 'number',
+                    default: undefined,
+                    description: 'Price linked to this address only.',
+                  },
+                  {
+                    displayName: 'Surface',
+                    name: 'surface',
+                    type: 'string',
+                    default: '',
+                    description: 'Surface/area for this address.',
+                  },
+                  {
+                    displayName: 'Location Type',
+                    name: 'locationType',
+                    type: 'string',
+                    default: '',
+                    description: 'Specific location type for this entry.',
+                  },
                 ],
               },
             ],
@@ -365,7 +445,7 @@ export class TownHallLocation implements INodeType {
       baseUrl,
       manualDefaults: defaults,
       description:
-        'Send location data to Project Buddy API. All parameters configured in the node are defaults – the AI agent can override or complete any field dynamically.',
+        'Send location data to Project Buddy API. Always supply at least one address and enrich with price, surface, and location type when they are known or inferred confidently. Omit uncertain fields instead of guessing wildly.',
     });
     return { response: tool };
   }

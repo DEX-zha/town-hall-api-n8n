@@ -27,13 +27,28 @@ import {
 } from './shared';
 
 const projectMaturityToolSchema = z.object({
-  sessionId: z.string().describe('Optional session identifier.').optional(),
-  maturityLevel: z.string().optional(),
-  maturityPercentage: z.union([z.number(), z.string()]).optional(),
-  positivePoints: z.array(z.string()).optional(),
-  negativePoints: z.array(z.string()).optional(),
-  description: z.string().optional(),
-  extraFields: z.record(z.string(), z.unknown()).optional(),
+  sessionId: z.string().describe('Optional session identifier to correlate multiple calls.').optional(),
+  maturityLevel: z.string().describe('Overall qualitative maturity level, e.g. "ideation", "advanced".').optional(),
+  maturityPercentage: z
+    .union([z.number(), z.string()])
+    .describe('Maturity expressed as percentage between 0 and 100. Accepts numbers or numeric strings.')
+    .optional(),
+  positivePoints: z
+    .array(z.string())
+    .describe('List the main strengths or positive signals as short sentences.')
+    .optional(),
+  negativePoints: z
+    .array(z.string())
+    .describe('List the main weaknesses or risks as short sentences.')
+    .optional(),
+  description: z
+    .string()
+    .describe('Free-form narrative describing the project status and context.')
+    .optional(),
+  extraFields: z
+    .record(z.string(), z.unknown())
+    .describe('Additional JSON key/value pairs to pass through to the API unchanged.')
+    .optional(),
 });
 
 export type ProjectMaturityToolInput = z.infer<typeof projectMaturityToolSchema>;
@@ -52,7 +67,7 @@ class TownHallProjectMaturityTool extends DynamicStructuredTool<typeof projectMa
       name: options.name ?? 'town_hall_project_maturity_tool',
       description:
         options.description ??
-        'Send structured project maturity data to the Project Buddy API. The AI can provide all parameters dynamically and they will be merged with the defaults configured on the node.',
+        'Send structured project maturity data to the Project Buddy API. Provide qualitative level, percentage, and bullet points when available. Summaries should stay factual; omit fields you cannot justify.',
       schema: projectMaturityToolSchema,
       func: async (input: unknown) => {
         const parsed = projectMaturityToolSchema.parse(input);
@@ -163,18 +178,27 @@ async function handleProjectMaturityRequest({
   try {
     mergedInput = mergeProjectMaturityDefaults(manualDefaults, toolInput);
   } catch (error) {
+    const message = (error as Error).message;
     return {
       status: 'validation_error',
       action: 'project-maturity',
-      validationErrors: [(error as Error).message],
+      statusMessage: `Unable to merge project maturity defaults: ${message}`,
+      validationErrors: [message],
     };
   }
 
   const { body, errors, warnings } = normalizeProjectMaturityInput(mergedInput);
   if (!body || errors.length) {
+    const messageParts = [
+      'Validation failed for project maturity payload.',
+      errors.length ? `Errors: ${errors.join('; ')}` : null,
+      warnings.length ? `Warnings: ${warnings.join('; ')}` : null,
+    ].filter(Boolean);
+
     return {
       status: 'validation_error',
       action: 'project-maturity',
+      statusMessage: messageParts.join(' '),
       validationErrors: errors,
       validationWarnings: warnings.length ? warnings : undefined,
     };
@@ -184,9 +208,12 @@ async function handleProjectMaturityRequest({
 
   try {
     const response = await postToProjectBuddy(baseUrl, '/api/project-maturity', cleanedBody);
+    const messageParts = ['Project maturity data posted successfully.'];
+    if (warnings.length) messageParts.push(`Warnings: ${warnings.join('; ')}`);
     return {
       status: 'success',
       action: 'project-maturity',
+      statusMessage: messageParts.join(' '),
       requestBody: cleanedBody,
       response,
       validationWarnings: warnings.length ? warnings : undefined,
@@ -201,6 +228,7 @@ async function handleProjectMaturityRequest({
     return {
       status: 'error',
       action: 'project-maturity',
+      statusMessage: `Project maturity request failed: ${payload.message}`,
       requestBody: cleanedBody,
       validationWarnings: warnings.length ? warnings : undefined,
       error: payload,
@@ -287,7 +315,13 @@ export class TownHallProjectMaturity implements INodeType {
         default: {},
         placeholder: 'Add Session Info',
         options: [
-          { displayName: 'Session ID', name: 'sessionId', type: 'string', default: '' },
+          {
+            displayName: 'Session ID',
+            name: 'sessionId',
+            type: 'string',
+            default: '',
+            description: 'Identifier shared across multiple calls so the API can link them together.',
+          },
           {
             displayName: 'Let Model Define "Session ID"',
             name: 'sessionId_aiFill',
@@ -300,6 +334,7 @@ export class TownHallProjectMaturity implements INodeType {
             type: 'string',
             default: '',
             placeholder: 'https://project-buddy.example.com',
+            description: 'Base URL of your Project Buddy instance. Leave blank to rely on environment variables.',
           },
         ],
       },
@@ -312,14 +347,26 @@ export class TownHallProjectMaturity implements INodeType {
         description: 'Pre-configure maturity defaults. The AI can override or complete these fields.',
         options: [
           { displayName: 'Let Model Define Maturity Group', name: 'maturity_aiFill', type: 'boolean', default: false },
-          { displayName: 'Maturity Level', name: 'maturityLevel', type: 'string', default: '' },
+          {
+            displayName: 'Maturity Level',
+            name: 'maturityLevel',
+            type: 'string',
+            default: '',
+            description: 'Qualitative maturity level (e.g. "early", "advanced").',
+          },
           {
             displayName: 'Let Model Define "Maturity Level"',
             name: 'maturityLevel_aiFill',
             type: 'boolean',
             default: false,
           },
-          { displayName: 'Maturity Percentage', name: 'maturityPercentage', type: 'number', default: undefined },
+          {
+            displayName: 'Maturity Percentage',
+            name: 'maturityPercentage',
+            type: 'number',
+            default: undefined,
+            description: 'Percentage between 0 and 100 representing overall maturity.',
+          },
           {
             displayName: 'Let Model Define "Maturity Percentage"',
             name: 'maturityPercentage_aiFill',
@@ -337,7 +384,15 @@ export class TownHallProjectMaturity implements INodeType {
               {
                 name: 'values',
                 displayName: 'Point',
-                values: [{ displayName: 'Text', name: 'text', type: 'string', default: '' }],
+                values: [
+                  {
+                    displayName: 'Text',
+                    name: 'text',
+                    type: 'string',
+                    default: '',
+                    description: 'Strength or achievement stated as a short sentence.',
+                  },
+                ],
               },
             ],
           },
@@ -358,7 +413,15 @@ export class TownHallProjectMaturity implements INodeType {
               {
                 name: 'values',
                 displayName: 'Point',
-                values: [{ displayName: 'Text', name: 'text', type: 'string', default: '' }],
+                values: [
+                  {
+                    displayName: 'Text',
+                    name: 'text',
+                    type: 'string',
+                    default: '',
+                    description: 'Risk, weakness, or blocker stated as a short sentence.',
+                  },
+                ],
               },
             ],
           },
@@ -368,7 +431,14 @@ export class TownHallProjectMaturity implements INodeType {
             type: 'boolean',
             default: false,
           },
-          { displayName: 'Description', name: 'description', type: 'string', typeOptions: { rows: 4 }, default: '' },
+          {
+            displayName: 'Description',
+            name: 'description',
+            type: 'string',
+            typeOptions: { rows: 4 },
+            default: '',
+            description: 'Narrative summary that gives context, milestones, and next steps.',
+          },
           {
             displayName: 'Let Model Define "Description"',
             name: 'description_aiFill',
@@ -387,7 +457,7 @@ export class TownHallProjectMaturity implements INodeType {
       baseUrl,
       manualDefaults: defaults,
       description:
-        'Send project maturity data to Project Buddy API. All parameters configured in the node are defaults – the AI agent can override or complete any field dynamically.',
+        'Send project maturity data to Project Buddy API. Provide maturity level, percentage, positives, negatives, and a concise description when they are known. Skip fields you cannot support with evidence.',
     });
     return { response: tool };
   }

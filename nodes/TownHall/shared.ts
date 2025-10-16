@@ -30,6 +30,7 @@ export type NormalizedMaturityBody = IDataObject & {
 export interface ToolExecutionResult extends IDataObject {
   status: 'success' | 'validation_error' | 'error';
   action: 'location' | 'project-maturity';
+  statusMessage?: string;
   requestBody?: GenericValue;
   response?: GenericValue;
   validationWarnings?: string[];
