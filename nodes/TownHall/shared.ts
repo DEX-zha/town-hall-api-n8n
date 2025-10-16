@@ -198,37 +198,26 @@ export function useField<T>(
   return getter();
 }
 
-function safeStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
-    return `[unserializable: ${(error as Error).message ?? 'unknown error'}]`;
-  }
-}
-
 export function formatToolResult(result: ToolExecutionResult): string {
-  const lines: string[] = [
-    `status: ${result.status}`,
-    `action: ${result.action}`,
-  ];
+  const summaryParts: string[] = [];
+  if (result.statusMessage) summaryParts.push(result.statusMessage);
+  if (result.validationErrors?.length) summaryParts.push(`Errors: ${result.validationErrors.join('; ')}`);
+  if (result.validationWarnings?.length) summaryParts.push(`Warnings: ${result.validationWarnings.join('; ')}`);
 
-  if (result.statusMessage) lines.push(`message: ${result.statusMessage}`);
-  if (result.validationErrors?.length) {
-    lines.push(`validation_errors: ${result.validationErrors.join(' | ')}`);
-  }
-  if (result.validationWarnings?.length) {
-    lines.push(`validation_warnings: ${result.validationWarnings.join(' | ')}`);
-  }
-  if (result.requestBody !== undefined) {
-    lines.push(`request_body: ${safeStringify(result.requestBody)}`);
-  }
-  if (result.response !== undefined) {
-    lines.push(`response: ${safeStringify(result.response)}`);
-  }
-  if (result.error) {
-    lines.push(`error: ${safeStringify(result.error)}`);
-  }
+  const payload: Record<string, unknown> = {
+    status: result.status,
+    success: result.status === 'success',
+    action: result.action,
+    message: summaryParts.length ? summaryParts.join(' ') : undefined,
+    validationErrors: result.validationErrors?.length ? result.validationErrors : undefined,
+    validationWarnings: result.validationWarnings?.length ? result.validationWarnings : undefined,
+    requestBody: result.requestBody ?? undefined,
+    response: result.response ?? undefined,
+    error: result.error ?? undefined,
+    statusMessage: result.statusMessage ?? undefined,
+    raw: result,
+    timestamp: new Date().toISOString(),
+  };
 
-  lines.push(`raw: ${safeStringify(result)}`);
-  return lines.join('\n');
+  return JSON.stringify(payload);
 }
