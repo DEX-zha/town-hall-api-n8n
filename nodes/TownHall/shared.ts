@@ -197,3 +197,38 @@ export function useField<T>(
   if (isTrue(group?.[aiFlag])) return undefined;
   return getter();
 }
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    return `[unserializable: ${(error as Error).message ?? 'unknown error'}]`;
+  }
+}
+
+export function formatToolResult(result: ToolExecutionResult): string {
+  const lines: string[] = [
+    `status: ${result.status}`,
+    `action: ${result.action}`,
+  ];
+
+  if (result.statusMessage) lines.push(`message: ${result.statusMessage}`);
+  if (result.validationErrors?.length) {
+    lines.push(`validation_errors: ${result.validationErrors.join(' | ')}`);
+  }
+  if (result.validationWarnings?.length) {
+    lines.push(`validation_warnings: ${result.validationWarnings.join(' | ')}`);
+  }
+  if (result.requestBody !== undefined) {
+    lines.push(`request_body: ${safeStringify(result.requestBody)}`);
+  }
+  if (result.response !== undefined) {
+    lines.push(`response: ${safeStringify(result.response)}`);
+  }
+  if (result.error) {
+    lines.push(`error: ${safeStringify(result.error)}`);
+  }
+
+  lines.push(`raw: ${safeStringify(result)}`);
+  return lines.join('\n');
+}

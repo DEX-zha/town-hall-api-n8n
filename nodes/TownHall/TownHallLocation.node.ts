@@ -15,6 +15,7 @@ import {
   NormalizedAddress,
   NormalizedLocationBody,
   ToolExecutionResult,
+  formatToolResult,
   isTrue,
   normalizeAddresses,
   postToProjectBuddy,
@@ -80,14 +81,13 @@ class TownHallLocationTool extends DynamicStructuredTool<typeof locationToolSche
       schema: locationToolSchema,
       func: async (input: unknown) => {
         const parsed = locationToolSchema.parse(input);
-        return JSON.stringify(
-          await handleLocationRequest({
-            toolInput: parsed,
-            baseUrl: options.baseUrl,
-            manualDefaults: options.manualDefaults,
-            context: options.context,
-          }),
-        );
+        const result = await handleLocationRequest({
+          toolInput: parsed,
+          baseUrl: options.baseUrl,
+          manualDefaults: options.manualDefaults,
+          context: options.context,
+        });
+        return formatToolResult(result);
       },
     });
   }

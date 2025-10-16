@@ -16,6 +16,7 @@ import {
   ToolExecutionResult,
   dedupePointsFromFixedCollection,
   dedupeStrings,
+  formatToolResult,
   isTrue,
   postToProjectBuddy,
   removeUndefinedDeep,
@@ -71,14 +72,13 @@ class TownHallProjectMaturityTool extends DynamicStructuredTool<typeof projectMa
       schema: projectMaturityToolSchema,
       func: async (input: unknown) => {
         const parsed = projectMaturityToolSchema.parse(input);
-        return JSON.stringify(
-          await handleProjectMaturityRequest({
-            toolInput: parsed,
-            baseUrl: options.baseUrl,
-            manualDefaults: options.manualDefaults,
-            context: options.context,
-          }),
-        );
+        const result = await handleProjectMaturityRequest({
+          toolInput: parsed,
+          baseUrl: options.baseUrl,
+          manualDefaults: options.manualDefaults,
+          context: options.context,
+        });
+        return formatToolResult(result);
       },
     });
   }
