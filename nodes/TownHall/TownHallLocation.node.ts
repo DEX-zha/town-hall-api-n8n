@@ -220,15 +220,50 @@ async function handleLocationRequest({
 
   try {
     const response = await postToProjectBuddy(baseUrl, '/api/locations', cleanedBody);
+    const responseRecord = (response ?? {}) as IDataObject;
+    const duplicates = Array.isArray(responseRecord.duplicates)
+      ? (responseRecord.duplicates as IDataObject[])
+      : [];
+    const savedCount =
+      typeof responseRecord.count === 'number'
+        ? responseRecord.count
+        : Array.isArray(responseRecord.locations)
+        ? (responseRecord.locations as IDataObject[]).length
+        : undefined;
+
+    const duplicatesSummary = duplicates
+      .map((dup) => {
+        const address = sanitizeString(dup.address);
+        const reason = sanitizeString(dup.reason);
+        if (address && reason) return `${address} (${reason})`;
+        if (address) return address;
+        return reason ?? 'duplicate';
+      })
+      .filter((entry) => entry.length);
+
+    const finalWarnings = [...warnings];
+    if (duplicatesSummary.length) {
+      finalWarnings.push(`Duplicates reported by API: ${duplicatesSummary.join(', ')}`);
+    }
+
     const messageParts = ['Location data posted successfully.'];
-    if (warnings.length) messageParts.push(`Warnings: ${warnings.join('; ')}`);
+    if (savedCount !== undefined) {
+      messageParts.push(`${savedCount} location${savedCount === 1 ? '' : 's'} saved.`);
+    }
+    if ((savedCount ?? 0) === 0 && duplicatesSummary.length) {
+      messageParts.push('No new locations saved because they already exist.');
+    }
+    if (finalWarnings.length) {
+      messageParts.push(`Warnings: ${finalWarnings.join('; ')}`);
+    }
+
     return {
       status: 'success',
       action: 'location',
       statusMessage: messageParts.join(' '),
       requestBody: cleanedBody,
       response,
-      validationWarnings: warnings.length ? warnings : undefined,
+      validationWarnings: finalWarnings.length ? finalWarnings : undefined,
     };
   } catch (error) {
     const payload = toAxiosErrorPayload(error as AxiosError);
