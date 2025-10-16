@@ -46,7 +46,8 @@
     "nodes": [
       "dist/nodes/ExampleNode/ExampleNode.node.js",
       "dist/nodes/HttpBin/HttpBin.node.js",
-      "dist/nodes/TownHall/TownHall.node.js"
+      "dist/nodes/TownHall/TownHallLocation.node.js",
+      "dist/nodes/TownHall/TownHallProjectMaturity.node.js"
     ]
   },
   "devDependencies": {
